@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rickytan/haptool/internal/appgallery"
+	"github.com/rickytan/haptool/internal/capture"
 )
 
 const version = "0.1.0"
@@ -29,6 +30,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		usage(stderr)
 		return flag.ErrHelp
+	}
+	if args[0] == "capture" {
+		return captureCommand(ctx, args[1:], stdout, stderr)
 	}
 	client, err := appgallery.NewClient()
 	if err != nil {
@@ -85,6 +89,42 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Name: %s\nBundle: %s\nApp ID: %s\nVersion: %s (%s)\nDeveloper: %s\nSize: %s\nArtifact: %s\n", a.Name, a.Package, a.AppID, a.Version, a.VersionCode, a.Developer, a.Size, a.ArtifactType)
 		return nil
+	case "fetch":
+		fs := flag.NewFlagSet("fetch", flag.ContinueOnError)
+		var id string
+		var jsonOut bool
+		fs.StringVar(&id, "id", "", "package name or AppGallery C identifier")
+		fs.BoolVar(&jsonOut, "json", false, "print JSON")
+		if err := fs.Parse(flagsFirst(args[1:], map[string]bool{"--id": true, "-id": true})); err != nil {
+			return err
+		}
+		if id == "" && fs.NArg() > 0 {
+			id = fs.Arg(0)
+		}
+		if id == "" {
+			return errors.New("usage: haptool fetch <package-or-appid> [--json]")
+		}
+		apps, err := client.FetchHarmonyFiles(ctx, id)
+		if err != nil {
+			return err
+		}
+		if jsonOut {
+			return writeJSON(stdout, apps)
+		}
+		for _, a := range apps {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", a.Package, a.Version, a.VersionCode, a.BundleType)
+			for _, f := range a.HapFiles {
+				url := f.DownloadURL
+				if url == "" && f.Compress != nil {
+					url = f.Compress.DownloadURL
+				}
+				if url == "" {
+					url = f.PackageURL
+				}
+				fmt.Fprintf(stdout, "  type=%d  size=%d  url=%s\n", f.FileType, f.FileSize, url)
+			}
+		}
+		return nil
 	case "download":
 		fs := flag.NewFlagSet("download", flag.ContinueOnError)
 		var id, output string
@@ -100,11 +140,39 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		if id == "" {
 			return errors.New("usage: haptool download <app-id-or-bundle> [-o FILE]")
 		}
+		happs, harmonyErr := client.FetchHarmonyFiles(ctx, id)
+		if harmonyErr == nil {
+			for _, ha := range happs {
+				if ha.Package == id || ha.AppID == id || id == "*" {
+					if len(ha.HapFiles) != 1 {
+						return errors.New("app does not contain exactly one HAP; inspect its modules with fetch or capture files")
+					}
+					url := ha.DownloadURL()
+					if url != "" {
+						dst := output
+						if dst == "" {
+							dst = ha.Package + "-" + ha.Version + ".hap"
+						}
+						file := ha.HapFiles[0]
+						artifact := capture.Artifact{Package: ha.Package, Version: ha.Version, URL: url, SHA256: file.SHA256, Size: file.FileSize, Kind: "original"}
+						if err := capture.Download(ctx, client.HTTPClient(), artifact, dst); err != nil {
+							return err
+						}
+						fmt.Fprintf(stdout, "Downloaded %s %s to %s\n", ha.Package, ha.Version, dst)
+						return nil
+					}
+					return errors.New("Harmony response has no usable original HAP URL; compressed or redacted files cannot be saved as HAPs")
+				}
+			}
+		}
 		a, err := client.Info(ctx, id)
 		if err != nil {
 			return err
 		}
 		if a.DownloadURL == "" {
+			if harmonyErr != nil {
+				return fmt.Errorf("Harmony fetch failed: %w; legacy AppGallery did not issue a package URL for this client session", harmonyErr)
+			}
 			return errors.New("AppGallery did not issue a package URL for this client session")
 		}
 		dst := output
@@ -234,5 +302,5 @@ func writeJSON(w io.Writer, v any) error {
 
 func usage(w io.Writer) {
 	fmt.Fprintln(w, "haptool - search and download packages from Huawei AppGallery")
-	fmt.Fprintln(w, "commands: auth, search, info, download, web-check, version")
+	fmt.Fprintln(w, "commands: auth, search, info, fetch, download, capture, web-check, version")
 }
