@@ -1,12 +1,14 @@
 package appgallery
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,6 +26,273 @@ const (
 	clientVersionCode = "160501301"
 	webUA             = "Mozilla/5.0 (Phone;OpenHarmony 6.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 ArkWeb/6.0.0.42 Mobile"
 )
+
+const (
+	harmonyAPIPath    = "/hwmarket/harmony/client"
+	harmonyMsgVer     = "1"
+	harmonyClientVer  = "7.7.1"
+	harmonyClientCode = "1470701300"
+	harmonyHost       = "store-drcn.hispace.dbankcloud.com"
+)
+
+type HarmonyApp struct {
+	Package     string        `json:"package,omitempty"`
+	AppID       string        `json:"appId,omitempty"`
+	Version     string        `json:"version,omitempty"`
+	VersionCode string        `json:"versionCode,omitempty"`
+	BundleType  string        `json:"bundleType,omitempty"`
+	HapFiles    []HarmonyFile `json:"hapFiles,omitempty"`
+}
+
+type HarmonyFile struct {
+	PackageURL  string           `json:"packageUrl,omitempty"`
+	DownloadURL string           `json:"downloadUrl,omitempty"`
+	SHA256      string           `json:"sha256,omitempty"`
+	FileSize    int64            `json:"fileSize,omitempty"`
+	FileType    int              `json:"fileType,omitempty"`
+	Compress    *HarmonyCompress `json:"compress,omitempty"`
+}
+
+type HarmonyCompress struct {
+	DownloadURL  string `json:"downloadUrl,omitempty"`
+	CompressType int    `json:"compressType,omitempty"`
+	FileSize     int64  `json:"fileSize,omitempty"`
+	SHA256       string `json:"sha256,omitempty"`
+}
+
+func (a HarmonyApp) DownloadURL() string {
+	for _, f := range a.HapFiles {
+		// A compressed/encrypted transport object is not the original HAP.
+		for _, candidate := range []string{f.DownloadURL, f.PackageURL} {
+			u, err := url.Parse(candidate)
+			if err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && !strings.Contains(candidate, "*") {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func newUUID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+func (c *Client) harmonyBody() map[string]any {
+	ts := time.Now().UnixMilli()
+	model := harmonyEnv("HAPTOOL_HARMONY_MODEL", "SCA-AL00")
+	clientCapability := harmonyEnv("HAPTOOL_HARMONY_CLIENT_CAPABILITY", "111111111111110101111101110111")
+	glVersion := harmonyEnv("HAPTOOL_HARMONY_GL_VERSION", "Maleoon.V360.6721605bb6c8da9cf2e35309cc57d25c1fcc6921")
+	return map[string]any{
+		"deviceIdType":        "10",
+		"harmonyDeviceType":   "phone",
+		"serviceType":         80,
+		"phoneType":           harmonyEnv("HAPTOOL_HARMONY_PHONE_TYPE", model),
+		"abis":                "arm64-v8a",
+		"recommendSwitch":     1,
+		"model":               model,
+		"marketName":          "*",
+		"clientPackage":       "com.huawei.hmsapp.appgallery",
+		"timeZone":            "Asia/Shanghai",
+		"accountZone":         "CN",
+		"issueZone":           "cn",
+		"density":             560,
+		"locale":              "zh_Hans",
+		"singleHarmonyClient": "1",
+		"net":                 1,
+		"ts":                  ts,
+		"code":                "0200",
+		"harmonyInfo": map[string]any{
+			"harmonyApiLevel":       24,
+			"harmonyReleaseType":    "Release",
+			"hmosApiLevel":          60101,
+			"hmosReleaseType":       "Release",
+			"arkSupport":            1,
+			"arkMinVersion":         2,
+			"arkMaxVersion":         402653184,
+			"harmonyDeviceType":     "phone",
+			"glVersion":             glVersion,
+			"compatibleDeviceTypes": []any{},
+			"deviceFeatures":        "",
+			"ohMinorApiVersion":     0,
+			"ohPatchApiVersion":     0,
+		},
+		"containerInfo": map[string]any{
+			"firmwareVersion": "",
+			"emuiApiLevel":    0,
+		},
+		"isSubUser":         0,
+		"manufacturer":      "HUAWEI",
+		"brand":             "HUAWEI",
+		"runMode":           2,
+		"deviceId":          "*",
+		"clientCapability":  clientCapability,
+		"pcEmulator":        0,
+		"clientVersion":     harmonyClientVer,
+		"clientVersionCode": harmonyClientCode,
+		"deviceHomeCountry": "CN",
+		"apsid":             harmonyEnv("HAPTOOL_HARMONY_APSID", strconv.FormatInt(ts, 10)),
+		"oaid":              "*",
+		"screenInfo":        "",
+		"osAccountId":       100,
+		"businessMode":      0,
+		"deviceRiskScore":   10,
+		"sid":               harmonyEnvInt64("HAPTOOL_HARMONY_SID", ts),
+	}
+}
+
+func (c *Client) harmonyPost(ctx context.Context, method string, body map[string]any) (map[string]any, error) {
+	ts := time.Now().UnixMilli()
+	u := fmt.Sprintf("https://%s%s?method=%s&ts=%d&msgver=%s&clientVersionCode=%s&nonce=%s",
+		harmonyHost, harmonyAPIPath, method, ts, harmonyMsgVer, harmonyClientCode, newUUID())
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", webUA)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return nil, httpStatusError("Harmony API", res)
+	}
+	var out map[string]any
+	if err = json.NewDecoder(res.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *Client) FetchHarmonyFiles(ctx context.Context, apps string) ([]HarmonyApp, error) {
+	body := c.harmonyBody()
+	body["invokeScene"] = 0
+	body["supportedCompressTypes"] = []any{1, 2}
+	body["harmonyDeviceParams"] = map[string]any{
+		"country":     []any{},
+		"deviceTypes": []any{"phone"},
+		"apps":        apps,
+	}
+	r, err := c.harmonyPost(ctx, "client.fetchHarmonyFiles", body)
+	if err != nil {
+		return nil, err
+	}
+	if stringValue(r["rtnCode"]) != "0" {
+		return nil, apiError(r)
+	}
+	var out []HarmonyApp
+	for _, ha := range slice(r["harmonyApps"]) {
+		app := harmonyAppFromMap(obj(ha))
+		if app.Package != "" {
+			out = append(out, app)
+		}
+	}
+	return out, nil
+}
+
+func (c *Client) GetPageDetail(ctx context.Context, appID string) (App, error) {
+	body := c.harmonyBody()
+	body["pageId"] = "app|" + appID
+	body["pageNum"] = 1
+	body["pageSize"] = 40
+	body["preload"] = 0
+	body["supportedCompressTypes"] = []any{1, 2}
+	r, err := c.harmonyPost(ctx, "client.getPageDetail", body)
+	if err != nil {
+		return App{}, err
+	}
+	if stringValue(r["rtnCode"]) != "0" {
+		return App{}, apiError(r)
+	}
+	a := findWebApp(r)
+	if a.Package == "" {
+		return App{}, errors.New("application not found")
+	}
+	return a, nil
+}
+
+func harmonyAppFromMap(m map[string]any) HarmonyApp {
+	app := HarmonyApp{
+		Package:     first(m, "pkgName", "bundleName", "packageName"),
+		AppID:       first(m, "appId"),
+		Version:     first(m, "versionName", "version"),
+		VersionCode: stringValue(m["versionCode"]),
+		BundleType:  stringValue(m["bundleType"]),
+	}
+	for _, hf := range slice(m["hapFiles"]) {
+		h := obj(hf)
+		f := HarmonyFile{
+			PackageURL:  first(h, "packageUrl"),
+			DownloadURL: first(h, "downloadUrl", "downUrl"),
+			SHA256:      first(h, "sha256"),
+			FileSize:    int64Value(h["fileSize"]),
+			FileType:    intValue(h["fileType"]),
+		}
+		if ci := obj(h["compressInfo"]); len(ci) > 0 {
+			f.Compress = &HarmonyCompress{
+				DownloadURL:  first(ci, "downloadUrl"),
+				CompressType: intValue(ci["compressType"]),
+				FileSize:     int64Value(ci["fileSize"]),
+				SHA256:       first(ci, "sha256"),
+			}
+		}
+		app.HapFiles = append(app.HapFiles, f)
+	}
+	return app
+}
+
+func intValue(v any) int {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func int64Value(v any) int64 {
+	switch x := v.(type) {
+	case float64:
+		return int64(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return n
+	default:
+		return 0
+	}
+}
+
+func harmonyEnv(name, fallback string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func harmonyEnvInt64(name string, fallback int64) int64 {
+	if v := os.Getenv(name); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			return n
+		}
+	}
+	return fallback
+}
 
 var zoneHosts = map[string]string{
 	"CN": "store-drcn.hispace.dbankcloud.com",
@@ -269,7 +538,7 @@ func (c *Client) post(ctx context.Context, host string, p map[string]string) (ma
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("AppGallery returned HTTP %s", res.Status)
+		return nil, httpStatusError("AppGallery", res)
 	}
 	var out map[string]any
 	if err = json.NewDecoder(res.Body).Decode(&out); err != nil {
@@ -399,6 +668,33 @@ func DefaultFilename(a App) string {
 }
 func apiError(m map[string]any) error {
 	return fmt.Errorf("AppGallery error %s: %s", stringValue(m["rtnCode"]), stringValue(m["rtnDesc"]))
+}
+func httpStatusError(service string, res *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	var doc map[string]any
+	_ = json.Unmarshal(body, &doc)
+	var details []string
+	if v := res.Header.Get("x-error-code"); v != "" {
+		details = append(details, "x-error-code="+v)
+	}
+	if v := stringValue(doc["rtnCode"]); v != "" {
+		details = append(details, "rtnCode="+v)
+	}
+	if v := stringValue(doc["rtnDesc"]); v != "" {
+		details = append(details, "rtnDesc="+v)
+	}
+	if len(details) == 0 {
+		if v := strings.TrimSpace(string(body)); v != "" {
+			if len(v) > 300 {
+				v = v[:300] + "..."
+			}
+			details = append(details, "body="+v)
+		}
+	}
+	if len(details) > 0 {
+		return fmt.Errorf("%s returned HTTP %s (%s)", service, res.Status, strings.Join(details, ", "))
+	}
+	return fmt.Errorf("%s returned HTTP %s", service, res.Status)
 }
 func stringValue(v any) string {
 	switch x := v.(type) {

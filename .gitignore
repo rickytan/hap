@@ -3,3 +3,5 @@
 *.app
 *.apk
 *.bin
+*.har
+/captures/
