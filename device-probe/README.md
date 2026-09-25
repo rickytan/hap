@@ -6,12 +6,14 @@ purpose downloader. It never reads AppGallery's sandbox or existing HUKS keys.
 
 The module:
 
-1. creates fresh P-256 attestation and unwrap keys in its own HUKS namespace;
-2. requests an anonymous-attestation credential from `/tsms/v2/credentials`;
-3. reconstructs the wrapped-key import blob used by `ucs-appauth` 1.0.4-310;
-4. imports the returned HMAC and AES keys with `importWrappedKeyItem`;
-5. signs `client.fetchHarmonyFiles` plus its millisecond timestamp; and
-6. sends one authenticated Store request for `com.ss.hm.article.news`.
+1. tries to connect to AppGallery's observed
+   `DownInstallServiceExtensionAbility` without sending an IPC request;
+2. creates fresh P-256 attestation and unwrap keys in its own HUKS namespace;
+3. requests an anonymous-attestation credential from `/tsms/v2/credentials`;
+4. reconstructs the wrapped-key import blob used by `ucs-appauth` 1.0.4-310;
+5. imports the returned HMAC and AES keys with `importWrappedKeyItem`;
+6. signs `client.fetchHarmonyFiles` plus its millisecond timestamp; and
+7. sends one authenticated Store request for `com.ss.hm.article.news`.
 
 The probe deletes every key it creates. A successful TSMS response is kept only
 in memory. Reports contain status codes and lengths, not credentials or signed
@@ -43,6 +45,12 @@ On a VYG-AL30 running OpenHarmony 7.0.0.105, credential issuance, both wrapped
 key imports, and the 32-byte HMAC all succeeded. The Store request then returned
 HTTP 206 with `rtnCode=634001` (`TSMS identify verify failed.`).
 
+The service-connection check returned code `16000004` (`Cannot start an
+invisible component`). AppGallery itself resolves the same
+`DownInstallServiceExtensionAbility` while installing an app, but a normal
+third-party application cannot connect to it. No IPC payload is sent even if a
+future AppGallery version makes the service connectable.
+
 The TSMS server accepts `com.huawei.hmsapp.appgallery` as the requested kit name,
 but the returned access key records the helper's attested package and signing
 identity. Changing the ordinary request fields to the helper identity did not
@@ -51,6 +59,7 @@ AppGallery produced `rtnCode=633001` (`TSMS signature verify failed.`). That
 mutation is not retained in this source.
 
 This establishes that a normal separately signed helper can reproduce the
-cryptography but cannot obtain AppGallery's Store identity. The next viable
-device-assisted design needs an authorized AppGallery-owned interface or a
-supported way to export a package after AppGallery installs it.
+cryptography but cannot obtain AppGallery's Store identity or call its hidden
+download service. The next viable device-assisted design needs an exported,
+authorized AppGallery-owned interface or a supported way to export a package
+after AppGallery installs it.
