@@ -54,6 +54,47 @@ reports redacted captures explicitly, and verifies size, SHA-256 and ZIP/HAP
 structure before saving an original file. These checks do not verify Huawei
 signatures or establish that an encrypted package is installable elsewhere.
 
+## Live TSMS reproduction
+
+A temporary feature module was installed under an existing debug application on
+the connected VYG-AL30. It creates only fresh keys in that application's HUKS
+namespace and does not access AppGallery's sandbox or key aliases.
+
+The current TSMS endpoint returned HTTP 200 for the anonymous-attestation
+credential request. The probe then reproduced the old SDK's wrapped-key binary
+layout and successfully imported both returned keys:
+
+| Step | Result |
+| --- | --- |
+| Anonymous P-256 attestation | three-certificate chain |
+| `/tsms/v2/credentials` | HTTP 200 |
+| HMAC secret key import | success |
+| AES data key import | success |
+| HMAC-SHA256 Store signing | 32-byte output |
+
+The wrapped-key layout is a sequence of little-endian 32-bit length-prefixed
+fields: temporary public key, access-key AAD, KEK IV, KEK tag, encrypted KEK,
+the same AAD, key IV, key tag, encoded 32-byte key length, and encrypted key.
+HUKS imports it with
+`HUKS_UNWRAP_SUITE_ECDH_AES_256_GCM_NOPADDING`.
+
+The resulting credential is still bound to the helper's attested package and
+signing identity. A signed `client.fetchHarmonyFiles` request returned HTTP 206,
+`rtnCode=634001`, `TSMS identify verify failed.`. Declaring the helper package in
+the ordinary request fields produced the same result. A separate one-off test
+that changed the access-key package and certificate identity to AppGallery's
+public bundle metadata changed the result to `rtnCode=633001`,
+`TSMS signature verify failed.`. This confirms that those identity fields cannot
+be rewritten into a usable AppGallery credential.
+
+The phone already has `com.ss.hm.article.news` 18.6.0 installed at the bundle
+manager path `/data/app/el1/bundle/public/com.ss.hm.article.news/NewsArticle.hap`.
+The HDC shell cannot read that path. Requesting
+`ohos.permission.ACCESS_BUNDLE_DIR` in the debug helper caused installation to
+fail with code `9568289`; the permission is `system_basic` and was not granted
+to the normal application. An install-then-copy fallback therefore also needs
+an authorized system interface.
+
 ## Offline signing analysis
 
 An official [firmware archive](https://update.dbankcdn.com/download/data/pub_13/HWHOTA_hota_900_9/24/v3/fThYWevRQueNuU8HO4XqWw/full/update_full_base.zip)
@@ -114,13 +155,14 @@ rg -n 'constructParam|applyUcsToken|CredentialSigner|huksAnonAttest|importWrappe
 
 ## Remaining investigation
 
-An unredacted, authorized client request/response is still needed to test URL
-portability and request replay. Offline analysis has now identified the older
-TSMS credential/signing chain. The next protocol milestone is validating that
-chain against current AppGallery and finding an authorized way to invoke its
-signer or obtain a complete request. A desktop HMAC implementation alone would
-not meet that milestone. Transfer decoding and code protection remain separate
-work even after request authentication succeeds.
+An unredacted AppGallery-owned request/response is still needed to test URL
+portability and request replay. The TSMS credential/signing chain itself has now
+been reproduced on current hardware; the remaining authentication boundary is
+the AppGallery package/signing identity. The next protocol milestone is finding
+an exported, authorized AppGallery service for downloading or installing, or a
+supported system interface that can export an installed package. Transfer
+decoding and code protection remain separate work even after that boundary is
+crossed.
 
 A first-hand [2024 protocol investigation](https://wuxianlin.com/2024/10/19/harmonyos-next-code-protect/)
 describes separate code-protection requests (`getCloudChallenge`,
