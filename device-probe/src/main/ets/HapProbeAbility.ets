@@ -1,4 +1,5 @@
-import { UIAbility } from '@kit.AbilityKit';
+import { UIAbility, Want, common } from '@kit.AbilityKit';
+import { rpc } from '@kit.IPCKit';
 import { huks } from '@kit.UniversalKeystoreKit';
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -154,6 +155,64 @@ export default class HapProbeAbility extends UIAbility {
     this.report.steps.push({ name: name, ok: ok, code: code, detail: detail });
     this.save('report.json', JSON.stringify(this.report, null, 2));
     hilog.info(0x0001, 'HapProbe', '%{public}s ok=%{public}s code=%{public}d', name, String(ok), code);
+  }
+
+  private async probeAppGalleryDownloadService(): Promise<void> {
+    const want: Want = {
+      bundleName: 'com.huawei.hmsapp.appgallery',
+      abilityName: 'DownInstallServiceExtensionAbility'
+    };
+    await new Promise<void>((resolve) => {
+      let connectionId = -1;
+      let finished = false;
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        this.record('connect-download-service', false, -1, 'Timed out waiting for AppGallery service connection');
+        if (connectionId >= 0) {
+          this.context.disconnectServiceExtensionAbility(connectionId).catch(() => {});
+        }
+        finish();
+      }, 5000);
+      const options: common.ConnectOptions = {
+        onConnect: (_element, remote: rpc.IRemoteObject): void => {
+          clearTimeout(timeout);
+          let descriptor = '';
+          try {
+            descriptor = remote.getInterfaceDescriptor();
+          } catch (_) {
+          }
+          this.record('connect-download-service', true, 0,
+            `Connected to AppGallery service; descriptor=${descriptor}; no IPC request sent`);
+          if (connectionId >= 0) {
+            this.context.disconnectServiceExtensionAbility(connectionId).catch(() => {});
+          }
+          finish();
+        },
+        onDisconnect: (): void => {
+        },
+        onFailed: (code: number): void => {
+          clearTimeout(timeout);
+          const detail = code === 16000004
+            ? 'Cannot start AppGallery download service because it is an invisible component'
+            : 'AppGallery download service rejected or could not resolve the caller';
+          this.record('connect-download-service', false, code,
+            detail);
+          finish();
+        }
+      };
+      try {
+        connectionId = this.context.connectServiceExtensionAbility(want, options);
+      } catch (error) {
+        clearTimeout(timeout);
+        const e = error as BusinessError;
+        this.record('connect-download-service', false, e.code || -1, e.message);
+        finish();
+      }
+    });
   }
 
   private eccOptions(purpose: number): huks.HuksOptions {
@@ -518,6 +577,7 @@ export default class HapProbeAbility extends UIAbility {
     const aliases: string[] = [];
     this.record('start', true, 0, 'Fresh probe keys only; existing AppGallery keys and private data are not accessed.');
     try {
+      await this.probeAppGalleryDownloadService();
       try {
         await huks.generateKeyItem(ecc, this.eccOptions(huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_SIGN |
           huks.HuksKeyPurpose.HUKS_KEY_PURPOSE_VERIFY));

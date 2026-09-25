@@ -12,7 +12,7 @@ that does not establish an end-to-end authenticated download.
 The connected phone reports `OpenHarmony-7.0.0.105`. A fresh AppGallery install
 of the free utility 简约计算器 (`com.zb.mh.newcomjisuanqihmmh`, version `1.0.0`)
 completed, and its detail page changed from 安装 to 打开. The application was
-left installed; it was not launched.
+not launched and did not remain installed after cleanup.
 
 Live AppGallery-domain logs show `AppGalleryService` requesting
 `client.fetchHarmonyFiles` and receiving `rtnCode: 0` with one entry module:
@@ -32,6 +32,33 @@ algorithm meanings. The response also contains `metaData` and `protectMetaData`.
 No usable URL appeared elsewhere in the captured AppGallery download logs.
 The system Request service diagnostic (`hidumper -s 3706 -a -t`) showed zero
 tasks when checked after completion; it did not provide a download address.
+
+Further native installs of 抖音精选 (`com.ss.hm.ugc.aweme.jingxuan`), 百度地图
+(`com.baidu.hmmap`) and 得物 (`com.dewu.hos`) exposed the current AppGallery
+control flow more clearly. AppGallery 7.7.1.300 connected to its internal
+`DownInstallServiceExtensionAbility`, invoked `client.fetchHarmonyFiles`, and
+received HTTP 200 with `rtnCode: 0` before each download and install completed.
+The 百度地图 response described version 1.21.0 with a 186,538,824-byte original
+HAP and a 129,972,928-byte transfer object. The 得物 response described version
+6.1.6 with a 175,509,632-byte original HAP and a 141,304,457-byte transfer
+object. Both reported `encType: 3`; package URLs, SHA-256 values and encrypted
+transfer keys were redacted as `*`.
+
+A separately signed probe then tried only to connect to the observed service.
+HarmonyOS rejected it with code `16000004`, `Cannot start an invisible
+component`. AppGallery can resolve the service inside its own bundle, while a
+normal third-party process cannot use it. The probe deliberately sends no IPC
+request if a connection ever succeeds.
+
+After installation, bundle manager paths such as
+`/data/app/el1/bundle/public/com.baidu.hmmap/entry.hap` remained unreadable to
+the HDC shell. `bm copy-ap` exports compilation profiles, not the installed HAP.
+The live flow therefore proves that a valid AppGallery-owned download works but
+does not expose a reusable URL or package file to this CLI.
+
+The three additional test applications and the `hap_probe` feature module were
+removed after the investigation. The pre-existing `cn.rickytan.netcap` base
+application and `com.ss.hm.article.news` were retained.
 
 ## Earlier certificate experiment in this session
 
@@ -53,6 +80,17 @@ The download code now keeps original HAPs separate from transport variants,
 reports redacted captures explicitly, and verifies size, SHA-256 and ZIP/HAP
 structure before saving an original file. These checks do not verify Huawei
 signatures or establish that an encrypted package is installable elsewhere.
+
+## Official AppGallery Kit boundary
+
+The documented product-view API accepts a target bundle name but only opens the
+AppGallery product page and guides the user through installation:
+[展示应用详情页面](https://developer.huawei.com/consumer/cn/doc/doccenter-capabilities/appgallery-productview-loadproduct).
+The documented [应用市场更新功能](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/store-update)
+checks for updates to the calling signed application. The native
+[ModuleInstall API](https://developer.huawei.com/consumer/cn/doc/doccenter-references/api/store-c-moduleinstall)
+installs on-demand modules and performs caller verification. None of these
+documented interfaces returns another application's package URL or HAP bytes.
 
 ## Live TSMS reproduction
 
@@ -94,6 +132,10 @@ The HDC shell cannot read that path. Requesting
 fail with code `9568289`; the permission is `system_basic` and was not granted
 to the normal application. An install-then-copy fallback therefore also needs
 an authorized system interface.
+
+The same permission boundary was confirmed against the current AppGallery
+download component: the third-party probe's connection attempt failed with
+`16000004` before any remote object or IPC descriptor was returned.
 
 ## Offline signing analysis
 
@@ -155,14 +197,15 @@ rg -n 'constructParam|applyUcsToken|CredentialSigner|huksAnonAttest|importWrappe
 
 ## Remaining investigation
 
-An unredacted AppGallery-owned request/response is still needed to test URL
-portability and request replay. The TSMS credential/signing chain itself has now
-been reproduced on current hardware; the remaining authentication boundary is
-the AppGallery package/signing identity. The next protocol milestone is finding
-an exported, authorized AppGallery service for downloading or installing, or a
-supported system interface that can export an installed package. Transfer
-decoding and code protection remain separate work even after that boundary is
-crossed.
+An unredacted AppGallery-owned response is still needed to test URL portability
+and request replay. The TSMS credential/signing chain itself has now been
+reproduced on current hardware; the remaining authentication boundary is the
+AppGallery package/signing identity. The observed download service is not
+exported to third-party applications. The next protocol milestone is therefore
+an authorized interface that returns package bytes, a supported package-export
+interface, or controlled instrumentation on an engineering/rooted device.
+Transfer decoding and code protection remain separate work even after that
+boundary is crossed.
 
 A first-hand [2024 protocol investigation](https://wuxianlin.com/2024/10/19/harmonyos-next-code-protect/)
 describes separate code-protection requests (`getCloudChallenge`,
