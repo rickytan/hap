@@ -63,6 +63,13 @@ application, and its module-install API installs on-demand modules rather than
 exporting another application's HAP. Links and the device evidence are recorded
 in the investigation notes.
 
+AppGallery Connect's "request download link" API is also not a package-export
+API. It is an authenticated media-promotion service that returns a temporary
+`hiapplink://com.huawei.appmarket?...` link. Opening that link delegates the
+download and installation to AppGallery; it does not return a `.hap` URL or
+bytes to the caller. The account must have an approved media app and matching
+API-client credentials before the endpoint can be used.
+
 ### Device capture experiments
 
 Export a HAR with decrypted HTTPS request and response bodies from an authorized

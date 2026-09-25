@@ -92,6 +92,34 @@ checks for updates to the calling signed application. The native
 installs on-demand modules and performs caller verification. None of these
 documented interfaces returns another application's package URL or HAP bytes.
 
+### AppGallery Connect download-direct API
+
+The AppGallery Connect API named `申请下载链接` was checked separately. Its live
+China endpoint is:
+
+```text
+POST https://connect-api.cloud.huawei.com/api/agd/cbs/v2/agd-link-generate
+```
+
+It requires a Connect API `client_id`, a Bearer token obtained with the matching
+client secret, and an approved media application's `callerPkgName`. An
+unauthenticated request reached the production endpoint on 2026-09-25 and was
+rejected with HTTP 401, confirming that the endpoint remains active.
+
+The successful response schema contains `link`, `expire`, `dependGms`,
+`rtnCode`, and `rtnDesc`. The documented `link` value has this form:
+
+```text
+hiapplink://com.huawei.appmarket?appId=...&callType=AGDAPI&...
+```
+
+This is a signed promotion/deep link. AppGallery consumes it to show a full or
+mini product page and perform the configured installation flow. It is not an
+HTTPS package URL and the response does not contain HAP bytes, SHA-256 values,
+transfer keys, or the `fetchHarmonyFiles` metadata. The API can support an
+AppGallery-driven install workflow for an approved media partner, but it cannot
+implement `haptool download`.
+
 ## Live TSMS reproduction
 
 A temporary feature module was installed under an existing debug application on
