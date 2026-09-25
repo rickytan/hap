@@ -47,9 +47,12 @@ are not sufficient.
 
 Static analysis of AppGallery 5.3.2.300 traced TSMS signing to the bundled
 `ucs-appauth` SDK: HMAC-SHA256 over API method plus timestamp, using a HUKS-managed
-key obtained through anonymous attestation. This older implementation has not
-yet been validated against current AppGallery. See the investigation notes for
-artifact hashes and the exact methods examined.
+key obtained through anonymous attestation. A real-device probe has now validated
+credential issuance, wrapped SK/DK import and Store-request signing against the
+current TSMS service. The independently signed helper still fails Store identity
+verification because the issued credential is bound to the helper's attested
+package and signing identity. See the investigation notes and
+[`device-probe`](device-probe/README.md).
 
 ### Device capture experiments
 
