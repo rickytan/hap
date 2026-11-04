@@ -54,14 +54,12 @@ current TSMS service. The independently signed helper still fails Store identity
 verification because the issued credential is bound to the helper's attested
 package and signing identity. It also cannot connect to AppGallery's observed
 download service: HarmonyOS rejects the hidden service as an invisible
-component. See the investigation notes and
-[`device-probe`](device-probe/README.md).
+component. See [`device-probe`](device-probe/README.md).
 
 The public AppGallery Kit surface does not expose raw packages. Its product-view
 API opens an AppGallery detail page, its update API checks the calling signed
 application, and its module-install API installs on-demand modules rather than
-exporting another application's HAP. Links and the device evidence are recorded
-in the investigation notes.
+exporting another application's HAP.
 
 AppGallery Connect's "request download link" API is also not a package-export
 API. It is an authenticated media-promotion service that returns a temporary
@@ -111,11 +109,6 @@ yet.
 (including recognized redactions). Presence is not proof that authentication
 is valid. No credential values are printed.
 
-The [device investigation notes](docs/device-download-investigation.md) record
-the successful phone-side install and the remaining barriers to a CLI download.
-The [API 26 emulator investigation](docs/api26-emulator-investigation.md) confirms
-that the inspected 7.0.0.107 (SP8) image includes hidden AppGallery 6.3.1.300,
-but its store request and download implementations are simulator stubs.
 `capture files` reports redacted values and transport types. The normal
 `download` command also refuses compressed-only responses and validates an
 original HAP before saving it; apps with multiple HAP modules require further
