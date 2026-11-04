@@ -113,6 +113,9 @@ is valid. No credential values are printed.
 
 The [device investigation notes](docs/device-download-investigation.md) record
 the successful phone-side install and the remaining barriers to a CLI download.
+The [API 26 emulator investigation](docs/api26-emulator-investigation.md) confirms
+that the inspected 7.0.0.107 (SP8) image includes hidden AppGallery 6.3.1.300,
+but its store request and download implementations are simulator stubs.
 `capture files` reports redacted values and transport types. The normal
 `download` command also refuses compressed-only responses and validates an
 original HAP before saving it; apps with multiple HAP modules require further
